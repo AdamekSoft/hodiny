@@ -1,0 +1,12 @@
+# Ignorování složky PyCharm
+.idea/
+
+# Ignorování souborů vytvořených Pythonem
+*.pyc
+__pycache__/
+
+# Ignorování databázových souborů (pokud je nechcete verzovat)
+*.db
+
+# Ignorování virtuálního prostředí
+.venv/
