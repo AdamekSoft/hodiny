@@ -1,3 +1,5 @@
+# server.py
+
 from flask import Flask, request, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
@@ -6,7 +8,8 @@ import json
 import uuid
 import logging
 from datetime import datetime, timedelta
-import requests
+import jwt
+from functools import wraps
 from data_source import DataSource  # Importujte DataSource z data_source.py
 
 # Konfigurace
@@ -33,6 +36,42 @@ if not os.path.exists(UPLOAD_FOLDER):
 # Inicializace datového zdroje
 data_source = DataSource()
 
+# Autentizační dekorátor
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        if 'Authorization' in request.headers:
+            parts = request.headers['Authorization'].split()
+            if len(parts) == 2 and parts[0] == 'Bearer':
+                token = parts[1]
+        if not token:
+            return jsonify({'message': 'Token is missing!'}), 403
+        try:
+            data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+            current_user = data['user']
+        except jwt.ExpiredSignatureError:
+            return jsonify({'message': 'Token has expired!'}), 403
+        except jwt.InvalidTokenError:
+            return jsonify({'message': 'Token is invalid!'}), 403
+        return f(current_user, *args, **kwargs)
+    return decorated
+
+# Endpoint pro hlavní stránku
+@app.route('/')
+def home():
+    return """
+    <html>
+        <head>
+            <title>Server Pracovních Záznamů</title>
+        </head>
+        <body style="font-family: Arial, sans-serif; text-align: center; margin-top: 50px;">
+            <h1>Server pro aplikaci pracovních záznamů běží</h1>
+            <p>Pod správou <strong>AdaSoft</strong>.</p>
+        </body>
+    </html>
+    """
+
 # Endpoint pro přihlášení a získání tokenu
 @app.route('/login', methods=['POST'])
 def login():
@@ -48,9 +87,26 @@ def login():
         return jsonify({'token': token}), 200
     return jsonify({'message': 'Worker not found'}), 404
 
+# Nový endpoint pro získání tokenu pomocí API klíče
+@app.route('/get_token', methods=['POST'])
+def get_token():
+    api_key = request.headers.get('x-api-key')
+    if not api_key:
+        return jsonify({'message': 'API key is missing!'}), 400
+    if data_source.verify_api_key(api_key):
+        # Vygenerovat token pro API klíč
+        token = jwt.encode({
+            'user': 'mobile_app',
+            'exp': datetime.utcnow() + timedelta(hours=1)
+        }, SECRET_KEY, algorithm="HS256")
+        return jsonify({'token': token}), 200
+    else:
+        return jsonify({'message': 'Invalid API key!'}), 403
+
 # Endpoint pro přidání pracovníka
 @app.route('/add_worker', methods=['POST'])
-def add_worker():
+@token_required
+def add_worker(current_user):
     data = request.json
     worker_name = data.get("worker", "").strip()
     if not worker_name:
@@ -63,7 +119,8 @@ def add_worker():
 
 # Endpoint pro odstranění pracovníka
 @app.route('/remove_worker', methods=['DELETE'])
-def remove_worker():
+@token_required
+def remove_worker(current_user):
     data = request.json
     worker_name = data.get("worker", "").strip()
     if not worker_name:
@@ -76,7 +133,8 @@ def remove_worker():
 
 # Endpoint pro přidání projektu
 @app.route('/add_project', methods=['POST'])
-def add_project():
+@token_required
+def add_project(current_user):
     data = request.json
     project_name = data.get("project", "").strip()
     if not project_name:
@@ -89,7 +147,8 @@ def add_project():
 
 # Endpoint pro odstranění projektu
 @app.route('/remove_project', methods=['DELETE'])
-def remove_project():
+@token_required
+def remove_project(current_user):
     data = request.json
     project_name = data.get("project", "").strip()
     if not project_name:
@@ -102,8 +161,10 @@ def remove_project():
 
 # Endpoint pro přidání záznamu
 @app.route('/add_record', methods=['POST'])
-def add_record():
+@token_required
+def add_record(current_user):
     data = request.json
+    # Validace struktury dat
     required_fields = ["worker", "project", "date", "start_time", "break_start", "break_end", "end_time", "hours", "description"]
     for field in required_fields:
         if field not in data:
@@ -117,13 +178,15 @@ def add_record():
 
 # Endpoint pro získání všech záznamů
 @app.route('/records_all', methods=['GET'])
-def get_all_records():
-    records = data_source.get_records_for_project(None)
+@token_required
+def get_all_records(current_user):
+    records = data_source.get_records_for_project(None)  # Získání všech záznamů bez filtru
     return jsonify({"records": records}), 200
 
 # Endpoint pro nahrání fotografie k projektu
 @app.route('/upload_photo', methods=['POST'])
-def upload_photo():
+@token_required
+def upload_photo(current_user):
     if 'photo' not in request.files:
         return jsonify({"status": "error", "message": "No file part"}), 400
     file = request.files['photo']
@@ -142,29 +205,33 @@ def upload_photo():
         filename = f"{uuid.uuid4().hex}_{file.filename}"
         file_path = os.path.join(project_folder, filename)
         file.save(file_path)
+
+        # Přidání cesty k fotografii do projektu
         relative_path = os.path.join(project_name, filename)
         data_source.add_photo_to_project(project_name, relative_path)
         socketio.emit('update_project_photos', {"project": project_name, "photos": data_source.get_photos_for_project(project_name)}, broadcast=True)
+
         return jsonify({"status": "success", "filename": relative_path}), 200
     else:
         return jsonify({"status": "error", "message": "File type not allowed"}), 400
 
-# Endpoint pro synchronizaci a zpracování fotografií
-@app.route('/process_photos', methods=['POST'])
-def process_photos():
-    temp_files = data_source.get_temp_files()
-    if not temp_files:
-        return jsonify({"status": "success", "message": "No files to process"}), 200
-    for file_path in temp_files:
-        with open(file_path, 'rb') as f:
-            response = requests.post(
-                'http://main_program_endpoint/upload',
-                files={'file': f}
-            )
-        if response.status_code == 200:
-            os.remove(file_path)
-            data_source.remove_temp_file(file_path)
-    return jsonify({"status": "success", "processed_files": len(temp_files)}), 200
+# Endpoint pro získání fotografií k projektu
+@app.route('/project_photos/<project_name>', methods=['GET'])
+@token_required
+def get_project_photos(current_user, project_name):
+    photos = data_source.get_photos_for_project(project_name)
+    return jsonify({"photos": photos}), 200
+
+# Endpoint pro stahování fotografie
+@app.route('/download_photo/<path:filename>', methods=['GET'])
+@token_required
+def download_photo(current_user, filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename, as_attachment=True)
+
+# Funkce pro kontrolu povolených typů souborů
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 # SocketIO události
 @socketio.on('connect')
@@ -175,11 +242,6 @@ def handle_connect():
 @socketio.on('disconnect')
 def handle_disconnect():
     logger.info('Klient odpojen.')
-
-# Přidání hlavní stránky (/)
-@app.route('/')
-def home():
-    return "Aplikace běží na serveru!"  # Tato stránka bude dostupná na hlavní adrese
 
 # Spuštění serveru
 if __name__ == "__main__":

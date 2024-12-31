@@ -1,7 +1,6 @@
-Flask
-Flask-SocketIO
-Flask-Cors
-PyJWT
-SQLAlchemy
-requests
-gunicorn
+git init
+git add .
+git commit -m "Initial commit for server"
+git branch -M main
+git remote add origin https://github.com/your-username/your-repository-name.git
+git push -u origin main
