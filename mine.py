@@ -6,8 +6,6 @@ import json
 import uuid
 import logging
 from datetime import datetime, timedelta
-import jwt
-from functools import wraps
 import requests
 from data_source import DataSource  # Importujte DataSource z data_source.py
 
@@ -35,27 +33,6 @@ if not os.path.exists(UPLOAD_FOLDER):
 # Inicializace datového zdroje
 data_source = DataSource()
 
-# Autentizační dekorátor
-def token_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        token = None
-        if 'Authorization' in request.headers:
-            parts = request.headers['Authorization'].split()
-            if len(parts) == 2 and parts[0] == 'Bearer':
-                token = parts[1]
-        if not token:
-            return jsonify({'message': 'Token is missing!'}), 403
-        try:
-            data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-            current_user = data['user']
-        except jwt.ExpiredSignatureError:
-            return jsonify({'message': 'Token has expired!'}), 403
-        except jwt.InvalidTokenError:
-            return jsonify({'message': 'Token is invalid!'}), 403
-        return f(current_user, *args, **kwargs)
-    return decorated
-
 # Endpoint pro přihlášení a získání tokenu
 @app.route('/login', methods=['POST'])
 def login():
@@ -71,25 +48,9 @@ def login():
         return jsonify({'token': token}), 200
     return jsonify({'message': 'Worker not found'}), 404
 
-# Endpoint pro získání tokenu pomocí API klíče
-@app.route('/get_token', methods=['POST'])
-def get_token():
-    api_key = request.headers.get('x-api-key')
-    if not api_key:
-        return jsonify({'message': 'API key is missing!'}), 400
-    if data_source.verify_api_key(api_key):
-        token = jwt.encode({
-            'user': 'mobile_app',
-            'exp': datetime.utcnow() + timedelta(hours=1)
-        }, SECRET_KEY, algorithm="HS256")
-        return jsonify({'token': token}), 200
-    else:
-        return jsonify({'message': 'Invalid API key!'}), 403
-
 # Endpoint pro přidání pracovníka
 @app.route('/add_worker', methods=['POST'])
-@token_required
-def add_worker(current_user):
+def add_worker():
     data = request.json
     worker_name = data.get("worker", "").strip()
     if not worker_name:
@@ -102,8 +63,7 @@ def add_worker(current_user):
 
 # Endpoint pro odstranění pracovníka
 @app.route('/remove_worker', methods=['DELETE'])
-@token_required
-def remove_worker(current_user):
+def remove_worker():
     data = request.json
     worker_name = data.get("worker", "").strip()
     if not worker_name:
@@ -116,8 +76,7 @@ def remove_worker(current_user):
 
 # Endpoint pro přidání projektu
 @app.route('/add_project', methods=['POST'])
-@token_required
-def add_project(current_user):
+def add_project():
     data = request.json
     project_name = data.get("project", "").strip()
     if not project_name:
@@ -130,8 +89,7 @@ def add_project(current_user):
 
 # Endpoint pro odstranění projektu
 @app.route('/remove_project', methods=['DELETE'])
-@token_required
-def remove_project(current_user):
+def remove_project():
     data = request.json
     project_name = data.get("project", "").strip()
     if not project_name:
@@ -144,8 +102,7 @@ def remove_project(current_user):
 
 # Endpoint pro přidání záznamu
 @app.route('/add_record', methods=['POST'])
-@token_required
-def add_record(current_user):
+def add_record():
     data = request.json
     required_fields = ["worker", "project", "date", "start_time", "break_start", "break_end", "end_time", "hours", "description"]
     for field in required_fields:
@@ -160,15 +117,13 @@ def add_record(current_user):
 
 # Endpoint pro získání všech záznamů
 @app.route('/records_all', methods=['GET'])
-@token_required
-def get_all_records(current_user):
+def get_all_records():
     records = data_source.get_records_for_project(None)
     return jsonify({"records": records}), 200
 
 # Endpoint pro nahrání fotografie k projektu
 @app.route('/upload_photo', methods=['POST'])
-@token_required
-def upload_photo(current_user):
+def upload_photo():
     if 'photo' not in request.files:
         return jsonify({"status": "error", "message": "No file part"}), 400
     file = request.files['photo']
