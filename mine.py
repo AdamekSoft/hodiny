@@ -1,5 +1,3 @@
-# server.py
-
 from flask import Flask, request, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
@@ -222,6 +220,11 @@ def handle_connect():
 @socketio.on('disconnect')
 def handle_disconnect():
     logger.info('Klient odpojen.')
+
+# Přidání hlavní stránky (/)
+@app.route('/')
+def home():
+    return "Aplikace běží na serveru!"  # Tato stránka bude dostupná na hlavní adrese
 
 # Spuštění serveru
 if __name__ == "__main__":
